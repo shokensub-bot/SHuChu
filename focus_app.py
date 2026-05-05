@@ -26,12 +26,15 @@ except ImportError as e:
     print(f"[DEBUG] ライブラリのインポートに失敗しました: {e}")
 
 CONFIG_FILE = "config.json"
+HISTORY_FILE = "history.json"
+
+import re
 
 class FocusApp:
     def __init__(self, root):
         self.root = root
         self.root.title("作業集中アプリ")
-        self.root.geometry("350x300")
+        self.root.geometry("400x300") # Slightly wider for new UI
 
         self.target_process_path = None
         self.is_monitoring = False
@@ -39,6 +42,7 @@ class FocusApp:
         self.timer_end_time = None
 
         self.load_config()
+        self.load_history()
         self.setup_ui()
 
     def load_config(self):
@@ -66,6 +70,26 @@ class FocusApp:
         with open(CONFIG_FILE, "w") as f:
             json.dump(self.config, f)
 
+    def load_history(self):
+        self.history = []
+        if os.path.exists(HISTORY_FILE):
+            try:
+                print(f"[DEBUG] 履歴を読み込み中: {HISTORY_FILE}")
+                with open(HISTORY_FILE, "r") as f:
+                    self.history = json.load(f)
+                    if not isinstance(self.history, list):
+                        self.history = []
+            except:
+                print("[ERROR] 履歴の読み込みに失敗しました。")
+                self.history = []
+        else:
+            print("[DEBUG] 履歴ファイルが見つかりません。")
+
+    def save_history(self):
+        print(f"[DEBUG] 履歴を保存中: {HISTORY_FILE}")
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(self.history, f)
+
     def setup_ui(self):
         frame = ttk.Frame(self.root, padding="10")
         frame.pack(fill=tk.BOTH, expand=True)
@@ -82,10 +106,19 @@ class FocusApp:
         ttk.Radiobutton(timer_frame, text="有効", variable=self.timer_enabled_var, value=True, command=self.on_config_ui_change).pack(side=tk.LEFT, padx=5)
 
         ttk.Label(timer_frame, text="時間:").pack(side=tk.LEFT, padx=(10, 2))
-        self.timer_minutes_var = tk.StringVar(value=str(self.config.get("timer_minutes", 30)))
-        self.timer_entry = ttk.Entry(timer_frame, textvariable=self.timer_minutes_var, width=5)
-        self.timer_entry.pack(side=tk.LEFT)
-        self.timer_entry.bind("<FocusOut>", lambda e: self.on_config_ui_change())
+        initial_val = self.minutes_to_hms(self.config.get("timer_minutes", 30))
+        self.timer_minutes_var = tk.StringVar(value=initial_val)
+
+        self.timer_combo = ttk.Combobox(timer_frame, textvariable=self.timer_minutes_var, width=8)
+        self.update_history_display()
+        self.timer_combo.pack(side=tk.LEFT)
+        self.timer_combo.bind("<FocusOut>", lambda e: self.on_config_ui_change())
+        self.timer_combo.bind("<<ComboboxSelected>>", lambda e: self.on_config_ui_change())
+
+        self.delete_hist_button = tk.Button(timer_frame, text="×", fg="red", command=self.delete_current_history,
+                                            relief=tk.FLAT, font=("Arial", 10, "bold"))
+        self.delete_hist_button.pack(side=tk.LEFT, padx=2)
+
         ttk.Label(timer_frame, text="分").pack(side=tk.LEFT)
 
         self.start_button = ttk.Button(frame, text="監視開始 (8秒後に捕捉)", command=self.start_countdown)
@@ -96,11 +129,66 @@ class FocusApp:
 
         ttk.Label(frame, text=f"ショートカット: {self.config['shortcut']}").pack(pady=5)
 
+    def minutes_to_hms(self, total_minutes):
+        if total_minutes <= 0:
+            return str(total_minutes)
+
+        h = total_minutes // 60
+        m = total_minutes % 60
+
+        if h > 0 and m > 0:
+            return f"{h}h{m}m"
+        elif h > 0:
+            return f"{h}h"
+        else:
+            return f"{m}m"
+
+    def hms_to_minutes(self, s):
+        s = s.strip().lower()
+        if not s:
+            return 0
+
+        # Pattern for "1h30m", "1h30", "1h", "30m", "30"
+        match = re.match(r'^(\d+h)?(\d+m?)?$', s)
+        if not match:
+            # Fallback to see if it's just a number
+            try:
+                return int(s)
+            except ValueError:
+                return 0
+
+        h_str, m_str = match.groups()
+        total = 0
+        if h_str:
+            total += int(h_str[:-1]) * 60
+        if m_str:
+            if m_str.endswith('m'):
+                total += int(m_str[:-1])
+            else:
+                total += int(m_str)
+        return total
+
+    def update_history_display(self):
+        # Sort history by time (minutes) and convert to HMS format
+        sorted_history = sorted(list(set(self.history)))
+        display_values = [self.minutes_to_hms(m) for m in sorted_history]
+        self.timer_combo['values'] = display_values
+
+    def delete_current_history(self):
+        current_val = self.timer_minutes_var.get()
+        minutes = self.hms_to_minutes(current_val)
+        if minutes in self.history:
+            self.history.remove(minutes)
+            self.save_history()
+            self.update_history_display()
+            print(f"[DEBUG] 履歴から削除しました: {current_val} ({minutes}分)")
+
     def on_config_ui_change(self):
         self.config["timer_enabled"] = self.timer_enabled_var.get()
         try:
-            val = int(self.timer_minutes_var.get())
-            self.config["timer_minutes"] = val
+            val = self.hms_to_minutes(self.timer_minutes_var.get())
+            if val > 0:
+                self.config["timer_minutes"] = val
         except ValueError:
             pass
         self.save_config()
@@ -108,27 +196,31 @@ class FocusApp:
     def start_countdown(self):
         # Update config from UI variables to ensure they are in sync
         self.config["timer_enabled"] = self.timer_enabled_var.get()
-        try:
-            val = self.timer_minutes_var.get()
-            if val:
-                self.config["timer_minutes"] = int(val)
-        except ValueError:
-            pass
-        self.save_config()
+
+        input_val = self.timer_minutes_var.get()
+        minutes = self.hms_to_minutes(input_val)
 
         # Validate timer if enabled
         if self.config.get("timer_enabled"):
-            try:
-                minutes = self.config.get("timer_minutes")
-                if minutes is None or minutes <= 0:
-                    raise ValueError
-            except ValueError:
-                messagebox.showerror("エラー", "有効な時間を分単位で入力してください（1以上の整数）。")
+            if minutes <= 0:
+                messagebox.showerror("エラー", "有効な時間を入力してください（1分以上の時間を指定してください）。")
                 return
+
+            self.config["timer_minutes"] = minutes
+
+            # Update history
+            if minutes not in self.history:
+                print(f"[DEBUG] 履歴に新しい時間を追加します: {minutes}分")
+                self.history.append(minutes)
+                self.save_history()
+                self.update_history_display()
+
+        self.save_config()
 
         print(f"[DEBUG] カウントダウン開始 (8秒) - タイマーモード: {self.config['timer_enabled']} ({self.config.get('timer_minutes')}分)")
         self.start_button.config(state=tk.DISABLED)
-        self.timer_entry.config(state=tk.DISABLED)
+        self.timer_combo.config(state=tk.DISABLED)
+        self.delete_hist_button.config(state=tk.DISABLED)
         self.countdown_val = 8
         self.show_overlay()
         self.update_countdown()
@@ -328,7 +420,8 @@ class FocusApp:
 
         self.status_label.config(text="停止中")
         self.start_button.config(state=tk.NORMAL)
-        self.timer_entry.config(state=tk.NORMAL)
+        self.timer_combo.config(state=tk.NORMAL)
+        self.delete_hist_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.stop_hotkey_listener()
         print("[DEBUG] 監視を停止し、後処理を完了しました。")
@@ -341,7 +434,8 @@ class FocusApp:
         self.is_monitoring = False
         self.status_label.config(text="停止中")
         self.start_button.config(state=tk.NORMAL)
-        self.timer_entry.config(state=tk.NORMAL)
+        self.timer_combo.config(state=tk.NORMAL)
+        self.delete_hist_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.stop_hotkey_listener()
 
