@@ -36,7 +36,7 @@ class FocusApp:
         self.target_process_path = None
         self.is_monitoring = False
         self.hotkey_listener = None
-        self.timer_id = None
+        self.timer_end_time = None
 
         self.load_config()
         self.setup_ui()
@@ -106,17 +106,27 @@ class FocusApp:
         self.save_config()
 
     def start_countdown(self):
+        # Update config from UI variables to ensure they are in sync
+        self.config["timer_enabled"] = self.timer_enabled_var.get()
+        try:
+            val = self.timer_minutes_var.get()
+            if val:
+                self.config["timer_minutes"] = int(val)
+        except ValueError:
+            pass
+        self.save_config()
+
         # Validate timer if enabled
-        if self.timer_enabled_var.get():
+        if self.config.get("timer_enabled"):
             try:
-                minutes = int(self.timer_minutes_var.get())
-                if minutes <= 0:
+                minutes = self.config.get("timer_minutes")
+                if minutes is None or minutes <= 0:
                     raise ValueError
             except ValueError:
                 messagebox.showerror("エラー", "有効な時間を分単位で入力してください（1以上の整数）。")
                 return
 
-        print("[DEBUG] カウントダウン開始 (8秒)")
+        print(f"[DEBUG] カウントダウン開始 (8秒) - タイマーモード: {self.config['timer_enabled']} ({self.config.get('timer_minutes')}分)")
         self.start_button.config(state=tk.DISABLED)
         self.timer_entry.config(state=tk.DISABLED)
         self.countdown_val = 8
@@ -194,8 +204,8 @@ class FocusApp:
             # Start timer if enabled
             if self.config.get("timer_enabled"):
                 minutes = self.config.get("timer_minutes", 30)
-                print(f"[DEBUG] タイマーを開始します: {minutes}分")
-                self.timer_id = self.root.after(minutes * 60 * 1000, self.on_timer_complete)
+                self.timer_end_time = time.time() + (minutes * 60)
+                print(f"[DEBUG] タイマーを開始します: {minutes}分 (終了予定: {time.strftime('%H:%M:%S', time.localtime(self.timer_end_time))})")
 
         except Exception as e:
             print(f"[ERROR] 対象の捕捉中にエラーが発生しました: {e}")
@@ -232,6 +242,13 @@ class FocusApp:
         print(f"[DEBUG] 監視ループを開始しました。自PID: {my_pid}")
 
         while self.is_monitoring:
+            # Check timer
+            if self.timer_end_time and time.time() >= self.timer_end_time:
+                print("[EVENT] タイマー時間が経過しました。")
+                self.timer_end_time = None
+                self.root.after(0, self.on_timer_complete)
+                break
+
             try:
                 curr_hwnd = win32gui.GetForegroundWindow()
                 if curr_hwnd:
@@ -304,11 +321,10 @@ class FocusApp:
         print("[DEBUG] 監視停止リクエストを受理しました。")
         self.is_monitoring = False
 
-        # Cancel timer if active
-        if self.timer_id:
-            print("[DEBUG] 実行中のタイマーを解除します。")
-            self.root.after_cancel(self.timer_id)
-            self.timer_id = None
+        # Reset timer
+        if self.timer_end_time:
+            print("[DEBUG] 実行中のタイマーをリセットします。")
+            self.timer_end_time = None
 
         self.status_label.config(text="停止中")
         self.start_button.config(state=tk.NORMAL)
@@ -319,8 +335,8 @@ class FocusApp:
         messagebox.showinfo("情報", "監視を解除しました。")
 
     def on_timer_complete(self):
-        print("[EVENT] タイマーが終了しました。")
-        self.timer_id = None
+        print("[EVENT] タイマー完了処理を開始します。")
+        self.timer_end_time = None
         # Stop monitoring first
         self.is_monitoring = False
         self.status_label.config(text="停止中")
