@@ -38,15 +38,19 @@ class FocusApp:
         default_config = {"shortcut": "alt+p"}
         if os.path.exists(CONFIG_FILE):
             try:
+                print(f"[DEBUG] 設定を読み込み中: {CONFIG_FILE}")
                 with open(CONFIG_FILE, "r") as f:
                     self.config = json.load(f)
             except:
+                print("[ERROR] 設定の読み込みに失敗しました。デフォルトを使用します。")
                 self.config = default_config
         else:
+            print("[DEBUG] 設定ファイルが見つかりません。新規作成します。")
             self.config = default_config
             self.save_config()
 
     def save_config(self):
+        print(f"[DEBUG] 設定を保存中: {CONFIG_FILE}")
         with open(CONFIG_FILE, "w") as f:
             json.dump(self.config, f)
 
@@ -66,6 +70,7 @@ class FocusApp:
         ttk.Label(frame, text=f"ショートカット: {self.config['shortcut']}").pack(pady=5)
 
     def start_countdown(self):
+        print("[DEBUG] カウントダウン開始 (8秒)")
         self.start_button.config(state=tk.DISABLED)
         self.countdown_val = 8
         self.show_overlay()
@@ -103,8 +108,10 @@ class FocusApp:
             self.capture_and_start()
 
     def capture_and_start(self):
+        print("[DEBUG] カウントダウン終了。対象アプリを捕捉します。")
         self.overlay.destroy()
         if not IS_WINDOWS:
+            print("[ERROR] Windows環境ではないため、これ以上進めません。")
             messagebox.showinfo("情報", "Windows環境以外では動作しません。")
             self.start_button.config(state=tk.NORMAL)
             return
@@ -112,6 +119,7 @@ class FocusApp:
         # Get current active window
         hwnd = win32gui.GetForegroundWindow()
         if not hwnd:
+            print("[ERROR] アクティブなウィンドウが見つかりませんでした。")
             messagebox.showerror("エラー", "対象のウィンドウを取得できませんでした。")
             self.start_button.config(state=tk.NORMAL)
             return
@@ -120,13 +128,16 @@ class FocusApp:
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
             process = psutil.Process(pid)
             self.target_process_path = process.exe()
-            self.target_hwnd = hwnd # Keep a reference to the main window
+
+            print(f"[DEBUG] 対象を捕捉しました: {os.path.basename(self.target_process_path)} (PID: {pid})")
+            print(f"[DEBUG] パス: {self.target_process_path}")
 
             self.is_monitoring = True
             self.status_label.config(text=f"監視中: {os.path.basename(self.target_process_path)}")
             self.stop_button.config(state=tk.NORMAL)
 
             # Start monitoring thread
+            print("[DEBUG] 監視スレッドを開始します。")
             self.monitor_thread = threading.Thread(target=self.monitoring_loop, daemon=True)
             self.monitor_thread.start()
 
@@ -134,21 +145,30 @@ class FocusApp:
             self.start_hotkey_listener()
 
         except Exception as e:
+            print(f"[ERROR] 対象の捕捉中にエラーが発生しました: {e}")
             messagebox.showerror("エラー", f"プロセスの取得に失敗しました: {e}")
             self.start_button.config(state=tk.NORMAL)
 
     def start_hotkey_listener(self):
         # Use the keyboard library for more robust global hotkeys on Windows
+        shortcut = self.config['shortcut']
+        print(f"[DEBUG] グローバルホットキーを登録します: {shortcut}")
         try:
-            keyboard.add_hotkey(self.config['shortcut'], lambda: self.root.after(0, self.stop_monitoring), suppress=False)
+            def on_hotkey():
+                print(f"[EVENT] グローバルホットキー ({shortcut}) を検知しました！")
+                self.root.after(0, self.stop_monitoring)
+
+            keyboard.add_hotkey(shortcut, on_hotkey, suppress=False)
+            print("[DEBUG] ホットキーの登録に成功しました。")
         except Exception as e:
-            print(f"Hotkey listener error: {e}")
+            print(f"[ERROR] ホットキーの登録に失敗しました: {e}")
 
     def stop_hotkey_listener(self):
+        print("[DEBUG] 全てのホットキー設定を解除します。")
         try:
             keyboard.remove_all_hotkeys()
-        except:
-            pass
+        except Exception as e:
+            print(f"[ERROR] ホットキーの解除中にエラーが発生しました: {e}")
 
     def monitoring_loop(self):
         if IS_WINDOWS:
@@ -156,6 +176,7 @@ class FocusApp:
             pythoncom.CoInitialize()
 
         my_pid = os.getpid()
+        print(f"[DEBUG] 監視ループを開始しました。自PID: {my_pid}")
 
         while self.is_monitoring:
             try:
@@ -173,26 +194,26 @@ class FocusApp:
 
                         if curr_path != self.target_process_path:
                             # Not the target process! Bring it back.
+                            print(f"[EVENT] 非対象アプリへの切り替えを検知: {os.path.basename(curr_path)}")
                             self.bring_target_to_front()
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         # Some system processes might be restricted
+                        print("[DEBUG] プロセス情報にアクセスできません。呼び戻しを試みます。")
                         self.bring_target_to_front()
             except Exception as e:
-                print(f"Monitor error: {e}")
+                print(f"[ERROR] 監視ループ内でエラー: {e}")
 
             time.sleep(0.5) # Check every 0.5 seconds
 
     def bring_target_to_front(self):
+        print("[DEBUG] 対象アプリを前面に呼び戻します...")
         # We need to find a window belonging to the target process path
         def callback(hwnd, hwnds):
             if win32gui.IsWindowVisible(hwnd):
                 _, pid = win32process.GetWindowThreadProcessId(hwnd)
                 try:
-                    # Some processes might have multiple windows.
-                    # We want to find the one that was likely the main window.
                     p = psutil.Process(pid)
                     if p.exe() == self.target_process_path:
-                        # Exclude some common system windows or empty titles if possible
                         title = win32gui.GetWindowText(hwnd)
                         if title:
                             hwnds.append((hwnd, title))
@@ -204,25 +225,20 @@ class FocusApp:
         win32gui.EnumWindows(callback, hwnds)
 
         if hwnds:
-            # For Clip Studio, there might be multiple windows.
-            # We try to pick the one that looks like a main window (has title).
-            # If we already have a target_hwnd from capture, try to see if it's still valid.
             target = hwnds[0][0]
+            print(f"[DEBUG] 前面に移動するウィンドウ: {hwnds[0][1]}")
 
             try:
-                # To bring a window to front reliably on Windows:
-                # 1. Send a dummy Alt key to unlock the SetForegroundWindow restriction
                 shell = win32com.client.Dispatch("WScript.Shell")
                 shell.SendKeys('%')
 
-                # 2. Try to restore if minimized
                 if win32gui.IsIconic(target):
                     win32gui.ShowWindow(target, win32con.SW_RESTORE)
 
-                # 3. Set foreground
                 win32gui.SetForegroundWindow(target)
+                print("[DEBUG] 呼び戻しに成功しました。")
             except Exception as e:
-                # Fallback
+                print(f"[ERROR] 呼び戻しに失敗しました: {e}")
                 try:
                     win32gui.ShowWindow(target, win32con.SW_SHOW)
                     win32gui.SetForegroundWindow(target)
@@ -232,11 +248,13 @@ class FocusApp:
     def stop_monitoring(self):
         if not self.is_monitoring:
             return
+        print("[DEBUG] 監視停止リクエストを受理しました。")
         self.is_monitoring = False
         self.status_label.config(text="停止中")
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.stop_hotkey_listener()
+        print("[DEBUG] 監視を停止し、後処理を完了しました。")
         messagebox.showinfo("情報", "監視を解除しました。")
 
 if __name__ == "__main__":
