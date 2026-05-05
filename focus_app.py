@@ -14,7 +14,7 @@ try:
     import win32con
     import win32com.client
     import psutil
-    from pynput import keyboard
+    import keyboard  # Switched from pynput to keyboard library
     IS_WINDOWS = True
 except ImportError:
     IS_WINDOWS = False
@@ -35,7 +35,7 @@ class FocusApp:
         self.setup_ui()
 
     def load_config(self):
-        default_config = {"shortcut": "<alt>+p"}
+        default_config = {"shortcut": "alt+p"}
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r") as f:
@@ -44,6 +44,7 @@ class FocusApp:
                 self.config = default_config
         else:
             self.config = default_config
+            self.save_config()
 
     def save_config(self):
         with open(CONFIG_FILE, "w") as f:
@@ -137,33 +138,35 @@ class FocusApp:
             self.start_button.config(state=tk.NORMAL)
 
     def start_hotkey_listener(self):
-        if self.hotkey_listener:
-            self.hotkey_listener.stop()
-
-        def on_activate():
-            self.root.after(0, self.stop_monitoring)
-
-        # Map string config to pynput format
-        # For simplicity, we assume the user sets it correctly.
-        # Default is <alt>+p
+        # Use the keyboard library for more robust global hotkeys on Windows
         try:
-            self.hotkey_listener = keyboard.GlobalHotKeys({
-                self.config['shortcut']: on_activate
-            })
-            self.hotkey_listener.start()
+            keyboard.add_hotkey(self.config['shortcut'], lambda: self.root.after(0, self.stop_monitoring), suppress=False)
         except Exception as e:
             print(f"Hotkey listener error: {e}")
+
+    def stop_hotkey_listener(self):
+        try:
+            keyboard.remove_all_hotkeys()
+        except:
+            pass
 
     def monitoring_loop(self):
         if IS_WINDOWS:
             import pythoncom
             pythoncom.CoInitialize()
 
+        my_pid = os.getpid()
+
         while self.is_monitoring:
             try:
                 curr_hwnd = win32gui.GetForegroundWindow()
                 if curr_hwnd:
                     _, pid = win32process.GetWindowThreadProcessId(curr_hwnd)
+                    if pid == my_pid:
+                        # Don't snatch focus if the user is interacting with this app
+                        time.sleep(0.5)
+                        continue
+
                     try:
                         curr_process = psutil.Process(pid)
                         curr_path = curr_process.exe()
@@ -227,13 +230,13 @@ class FocusApp:
                     pass
 
     def stop_monitoring(self):
+        if not self.is_monitoring:
+            return
         self.is_monitoring = False
         self.status_label.config(text="停止中")
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
-        if self.hotkey_listener:
-            self.hotkey_listener.stop()
-            self.hotkey_listener = None
+        self.stop_hotkey_listener()
         messagebox.showinfo("情報", "監視を解除しました。")
 
 if __name__ == "__main__":
