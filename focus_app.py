@@ -7,6 +7,9 @@ import time
 import sys
 
 # Windows specific libraries (wrapped in try-except for cross-platform development/checking)
+IS_WINDOWS = False
+IMPORT_ERROR_MSG = ""
+
 try:
     import win32gui
     import win32process
@@ -16,8 +19,11 @@ try:
     import psutil
     import keyboard  # Switched from pynput to keyboard library
     IS_WINDOWS = True
-except ImportError:
-    IS_WINDOWS = False
+except ImportError as e:
+    IMPORT_ERROR_MSG = str(e)
+    # On non-Windows environments for dev, this is expected.
+    # On Windows, this means libraries are missing.
+    print(f"[DEBUG] ライブラリのインポートに失敗しました: {e}")
 
 CONFIG_FILE = "config.json"
 
@@ -111,8 +117,8 @@ class FocusApp:
         print("[DEBUG] カウントダウン終了。対象アプリを捕捉します。")
         self.overlay.destroy()
         if not IS_WINDOWS:
-            print("[ERROR] Windows環境ではないため、これ以上進めません。")
-            messagebox.showinfo("情報", "Windows環境以外では動作しません。")
+            print(f"[ERROR] Windowsライブラリが利用不可です: {IMPORT_ERROR_MSG}")
+            messagebox.showerror("エラー", f"Windowsライブラリの読み込みに失敗しました。\n\n詳細: {IMPORT_ERROR_MSG}\n\npip install -r requirements.txt を実行したか確認してください。")
             self.start_button.config(state=tk.NORMAL)
             return
 
