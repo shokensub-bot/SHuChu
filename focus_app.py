@@ -31,22 +31,28 @@ class FocusApp:
     def __init__(self, root):
         self.root = root
         self.root.title("作業集中アプリ")
-        self.root.geometry("300x200")
+        self.root.geometry("350x300")
 
         self.target_process_path = None
         self.is_monitoring = False
         self.hotkey_listener = None
+        self.timer_id = None
 
         self.load_config()
         self.setup_ui()
 
     def load_config(self):
-        default_config = {"shortcut": "alt+p"}
+        default_config = {
+            "shortcut": "alt+p",
+            "timer_enabled": False,
+            "timer_minutes": 30
+        }
         if os.path.exists(CONFIG_FILE):
             try:
                 print(f"[DEBUG] 設定を読み込み中: {CONFIG_FILE}")
                 with open(CONFIG_FILE, "r") as f:
-                    self.config = json.load(f)
+                    loaded_config = json.load(f)
+                    self.config = {**default_config, **loaded_config}
             except:
                 print("[ERROR] 設定の読み込みに失敗しました。デフォルトを使用します。")
                 self.config = default_config
@@ -61,11 +67,26 @@ class FocusApp:
             json.dump(self.config, f)
 
     def setup_ui(self):
-        frame = ttk.Frame(self.root, padding="20")
+        frame = ttk.Frame(self.root, padding="10")
         frame.pack(fill=tk.BOTH, expand=True)
 
         self.status_label = ttk.Label(frame, text="停止中", font=("MS Gothic", 12))
-        self.status_label.pack(pady=10)
+        self.status_label.pack(pady=5)
+
+        # Timer settings
+        timer_frame = ttk.LabelFrame(frame, text="タイマーモード設定", padding="10")
+        timer_frame.pack(fill=tk.X, pady=5)
+
+        self.timer_enabled_var = tk.BooleanVar(value=self.config.get("timer_enabled", False))
+        ttk.Radiobutton(timer_frame, text="無効", variable=self.timer_enabled_var, value=False, command=self.on_config_ui_change).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(timer_frame, text="有効", variable=self.timer_enabled_var, value=True, command=self.on_config_ui_change).pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(timer_frame, text="時間:").pack(side=tk.LEFT, padx=(10, 2))
+        self.timer_minutes_var = tk.StringVar(value=str(self.config.get("timer_minutes", 30)))
+        self.timer_entry = ttk.Entry(timer_frame, textvariable=self.timer_minutes_var, width=5)
+        self.timer_entry.pack(side=tk.LEFT)
+        self.timer_entry.bind("<FocusOut>", lambda e: self.on_config_ui_change())
+        ttk.Label(timer_frame, text="分").pack(side=tk.LEFT)
 
         self.start_button = ttk.Button(frame, text="監視開始 (8秒後に捕捉)", command=self.start_countdown)
         self.start_button.pack(pady=5)
@@ -75,9 +96,29 @@ class FocusApp:
 
         ttk.Label(frame, text=f"ショートカット: {self.config['shortcut']}").pack(pady=5)
 
+    def on_config_ui_change(self):
+        self.config["timer_enabled"] = self.timer_enabled_var.get()
+        try:
+            val = int(self.timer_minutes_var.get())
+            self.config["timer_minutes"] = val
+        except ValueError:
+            pass
+        self.save_config()
+
     def start_countdown(self):
+        # Validate timer if enabled
+        if self.timer_enabled_var.get():
+            try:
+                minutes = int(self.timer_minutes_var.get())
+                if minutes <= 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("エラー", "有効な時間を分単位で入力してください（1以上の整数）。")
+                return
+
         print("[DEBUG] カウントダウン開始 (8秒)")
         self.start_button.config(state=tk.DISABLED)
+        self.timer_entry.config(state=tk.DISABLED)
         self.countdown_val = 8
         self.show_overlay()
         self.update_countdown()
@@ -149,6 +190,12 @@ class FocusApp:
 
             # Start hotkey listener
             self.start_hotkey_listener()
+
+            # Start timer if enabled
+            if self.config.get("timer_enabled"):
+                minutes = self.config.get("timer_minutes", 30)
+                print(f"[DEBUG] タイマーを開始します: {minutes}分")
+                self.timer_id = self.root.after(minutes * 60 * 1000, self.on_timer_complete)
 
         except Exception as e:
             print(f"[ERROR] 対象の捕捉中にエラーが発生しました: {e}")
@@ -256,12 +303,54 @@ class FocusApp:
             return
         print("[DEBUG] 監視停止リクエストを受理しました。")
         self.is_monitoring = False
+
+        # Cancel timer if active
+        if self.timer_id:
+            print("[DEBUG] 実行中のタイマーを解除します。")
+            self.root.after_cancel(self.timer_id)
+            self.timer_id = None
+
         self.status_label.config(text="停止中")
         self.start_button.config(state=tk.NORMAL)
+        self.timer_entry.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.stop_hotkey_listener()
         print("[DEBUG] 監視を停止し、後処理を完了しました。")
         messagebox.showinfo("情報", "監視を解除しました。")
+
+    def on_timer_complete(self):
+        print("[EVENT] タイマーが終了しました。")
+        self.timer_id = None
+        # Stop monitoring first
+        self.is_monitoring = False
+        self.status_label.config(text="停止中")
+        self.start_button.config(state=tk.NORMAL)
+        self.timer_entry.config(state=tk.NORMAL)
+        self.stop_button.config(state=tk.DISABLED)
+        self.stop_hotkey_listener()
+
+        # Show completion overlay
+        self.show_completion_overlay()
+
+    def show_completion_overlay(self):
+        print("[DEBUG] 完了オーバーレイを表示します。")
+        self.comp_overlay = tk.Toplevel(self.root)
+        self.comp_overlay.attributes("-topmost", True)
+        self.comp_overlay.attributes("-fullscreen", True)
+        self.comp_overlay.configure(bg='black')
+        self.comp_overlay.focus_set()
+
+        label = tk.Label(
+            self.comp_overlay,
+            text="時間になりました！\nESCキーを押して戻ってください…",
+            font=("MS Gothic", 40, "bold"),
+            fg="white",
+            bg="black",
+            justify=tk.CENTER
+        )
+        label.pack(expand=True)
+
+        self.comp_overlay.bind("<Escape>", lambda e: self.comp_overlay.destroy())
 
 if __name__ == "__main__":
     root = tk.Tk()
