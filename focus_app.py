@@ -462,7 +462,7 @@ class FocusApp:
                 except:
                     pass
 
-    def stop_monitoring(self):
+    def stop_monitoring(self, show_msg=True):
         if not self.is_monitoring:
             return
         print("[DEBUG] 監視停止リクエストを受理しました。")
@@ -487,13 +487,14 @@ class FocusApp:
         self.stop_button.config(state=tk.DISABLED)
         self.stop_hotkey_listener()
         print("[DEBUG] 監視を停止し、後処理を完了しました。")
-        messagebox.showinfo("情報", "監視を解除しました。")
+        if show_msg:
+            messagebox.showinfo("情報", "監視を解除しました。")
 
     def on_timer_complete(self):
         print("[EVENT] タイマー完了処理を開始します。")
         self.timer_end_time = None
-        # Stop monitoring (including recording stop)
-        self.stop_monitoring()
+        # Stop monitoring (including recording stop) without showing the dialog
+        self.stop_monitoring(show_msg=False)
 
         # Show completion overlay
         self.show_completion_overlay()
@@ -510,7 +511,7 @@ class FocusApp:
         self.comp_overlay.attributes("-topmost", True)
         self.comp_overlay.attributes("-fullscreen", True)
         self.comp_overlay.configure(bg='black')
-        self.comp_overlay.focus_set()
+        self.comp_overlay.focus_force()
 
         label = tk.Label(
             self.comp_overlay,
