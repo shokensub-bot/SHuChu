@@ -40,16 +40,20 @@ class FocusApp:
         self.is_monitoring = False
         self.hotkey_listener = None
         self.timer_end_time = None
+        self.is_recording_active = False
 
         self.load_config()
         self.load_history()
         self.setup_ui()
 
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
     def load_config(self):
         default_config = {
             "shortcut": "alt+p",
             "timer_enabled": False,
-            "timer_minutes": 30
+            "timer_minutes": 30,
+            "auto_record_enabled": False
         }
         if os.path.exists(CONFIG_FILE):
             try:
@@ -102,10 +106,16 @@ class FocusApp:
         timer_frame.pack(fill=tk.X, pady=5)
 
         self.timer_enabled_var = tk.BooleanVar(value=self.config.get("timer_enabled", False))
-        ttk.Radiobutton(timer_frame, text="無効", variable=self.timer_enabled_var, value=False, command=self.on_config_ui_change).pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(timer_frame, text="有効", variable=self.timer_enabled_var, value=True, command=self.on_config_ui_change).pack(side=tk.LEFT, padx=5)
+        self.timer_radio_off = ttk.Radiobutton(timer_frame, text="無効", variable=self.timer_enabled_var, value=False, command=self.on_config_ui_change)
+        self.timer_radio_off.pack(side=tk.LEFT, padx=5)
+        self.timer_radio_on = ttk.Radiobutton(timer_frame, text="有効", variable=self.timer_enabled_var, value=True, command=self.on_config_ui_change)
+        self.timer_radio_on.pack(side=tk.LEFT, padx=5)
 
-        ttk.Label(timer_frame, text="時間:").pack(side=tk.LEFT, padx=(10, 2))
+        self.timer_widgets = []
+        lbl_time = ttk.Label(timer_frame, text="時間:")
+        lbl_time.pack(side=tk.LEFT, padx=(10, 2))
+        self.timer_widgets.append(lbl_time)
+
         initial_val = self.minutes_to_hms(self.config.get("timer_minutes", 30))
         self.timer_minutes_var = tk.StringVar(value=initial_val)
 
@@ -114,12 +124,24 @@ class FocusApp:
         self.timer_combo.pack(side=tk.LEFT)
         self.timer_combo.bind("<FocusOut>", lambda e: self.on_config_ui_change())
         self.timer_combo.bind("<<ComboboxSelected>>", lambda e: self.on_config_ui_change())
+        self.timer_widgets.append(self.timer_combo)
 
         self.delete_hist_button = tk.Button(timer_frame, text="×", fg="red", command=self.delete_current_history,
                                             relief=tk.FLAT, font=("Arial", 10, "bold"))
         self.delete_hist_button.pack(side=tk.LEFT, padx=2)
+        self.timer_widgets.append(self.delete_hist_button)
 
-        ttk.Label(timer_frame, text="分").pack(side=tk.LEFT)
+        lbl_min = ttk.Label(timer_frame, text="分")
+        lbl_min.pack(side=tk.LEFT)
+        self.timer_widgets.append(lbl_min)
+
+        # Auto record settings
+        self.auto_record_var = tk.BooleanVar(value=self.config.get("auto_record_enabled", False))
+        self.auto_record_check = ttk.Checkbutton(frame, text="自動録画モード (win+alt+r)",
+                                                 variable=self.auto_record_var, command=self.on_config_ui_change)
+        self.auto_record_check.pack(pady=5)
+
+        self.update_timer_ui_state()
 
         self.start_button = ttk.Button(frame, text="監視開始 (8秒後に捕捉)", command=self.start_countdown)
         self.start_button.pack(pady=5)
@@ -185,6 +207,7 @@ class FocusApp:
 
     def on_config_ui_change(self):
         self.config["timer_enabled"] = self.timer_enabled_var.get()
+        self.config["auto_record_enabled"] = self.auto_record_var.get()
         try:
             val = self.hms_to_minutes(self.timer_minutes_var.get())
             if val > 0:
@@ -192,6 +215,31 @@ class FocusApp:
         except ValueError:
             pass
         self.save_config()
+        self.update_timer_ui_state()
+
+    def update_timer_ui_state(self):
+        state = tk.NORMAL if self.timer_enabled_var.get() else tk.DISABLED
+        for w in self.timer_widgets:
+            try:
+                w.config(state=state)
+            except:
+                pass
+
+    def set_ui_state(self, state):
+        """監視中/停止中のUI有効・無効切り替え"""
+        self.start_button.config(state=state)
+        self.timer_radio_off.config(state=state)
+        self.timer_radio_on.config(state=state)
+        self.auto_record_check.config(state=state)
+
+        if state == tk.NORMAL:
+            self.update_timer_ui_state()
+        else:
+            for w in self.timer_widgets:
+                try:
+                    w.config(state=tk.DISABLED)
+                except:
+                    pass
 
     def start_countdown(self):
         # Update config from UI variables to ensure they are in sync
@@ -218,9 +266,7 @@ class FocusApp:
         self.save_config()
 
         print(f"[DEBUG] カウントダウン開始 (8秒) - タイマーモード: {self.config['timer_enabled']} ({self.config.get('timer_minutes')}分)")
-        self.start_button.config(state=tk.DISABLED)
-        self.timer_combo.config(state=tk.DISABLED)
-        self.delete_hist_button.config(state=tk.DISABLED)
+        self.set_ui_state(tk.DISABLED)
         self.countdown_val = 8
         self.show_overlay()
         self.update_countdown()
@@ -298,6 +344,15 @@ class FocusApp:
                 minutes = self.config.get("timer_minutes", 30)
                 self.timer_end_time = time.time() + (minutes * 60)
                 print(f"[DEBUG] タイマーを開始します: {minutes}分 (終了予定: {time.strftime('%H:%M:%S', time.localtime(self.timer_end_time))})")
+
+            # Start auto recording if enabled
+            if self.config.get("auto_record_enabled"):
+                print("[DEBUG] 自動録画を開始します (win+alt+r)")
+                try:
+                    keyboard.press_and_release('win+alt+r')
+                    self.is_recording_active = True
+                except Exception as re:
+                    print(f"[ERROR] 録画開始キーの送信に失敗しました: {re}")
 
         except Exception as e:
             print(f"[ERROR] 対象の捕捉中にエラーが発生しました: {e}")
@@ -413,15 +468,22 @@ class FocusApp:
         print("[DEBUG] 監視停止リクエストを受理しました。")
         self.is_monitoring = False
 
+        # Stop recording if active
+        if self.is_recording_active:
+            print("[DEBUG] 自動録画を停止します (win+alt+r)")
+            try:
+                keyboard.press_and_release('win+alt+r')
+            except Exception as re:
+                print(f"[ERROR] 録画停止キーの送信に失敗しました: {re}")
+            self.is_recording_active = False
+
         # Reset timer
         if self.timer_end_time:
             print("[DEBUG] 実行中のタイマーをリセットします。")
             self.timer_end_time = None
 
         self.status_label.config(text="停止中")
-        self.start_button.config(state=tk.NORMAL)
-        self.timer_combo.config(state=tk.NORMAL)
-        self.delete_hist_button.config(state=tk.NORMAL)
+        self.set_ui_state(tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.stop_hotkey_listener()
         print("[DEBUG] 監視を停止し、後処理を完了しました。")
@@ -430,17 +492,17 @@ class FocusApp:
     def on_timer_complete(self):
         print("[EVENT] タイマー完了処理を開始します。")
         self.timer_end_time = None
-        # Stop monitoring first
-        self.is_monitoring = False
-        self.status_label.config(text="停止中")
-        self.start_button.config(state=tk.NORMAL)
-        self.timer_combo.config(state=tk.NORMAL)
-        self.delete_hist_button.config(state=tk.NORMAL)
-        self.stop_button.config(state=tk.DISABLED)
-        self.stop_hotkey_listener()
+        # Stop monitoring (including recording stop)
+        self.stop_monitoring()
 
         # Show completion overlay
         self.show_completion_overlay()
+
+    def on_closing(self):
+        if self.is_monitoring:
+            print("[DEBUG] 監視中にアプリが終了されます。")
+            self.stop_monitoring()
+        self.root.destroy()
 
     def show_completion_overlay(self):
         print("[DEBUG] 完了オーバーレイを表示します。")
